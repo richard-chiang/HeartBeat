@@ -17,6 +17,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -92,12 +93,14 @@ type FDImp struct {
 
 type Monitor struct {
 	Conn             net.Conn
+	IsConnOn         bool
 	LocalIpPort      string
 	RemoteIpPort     string
 	LostMsgThresh    uint8
 	LostMsgCount     uint8
 	HeartBeatRecords map[uint64]PacketTime
 	Rtt              float64
+	Mux              sync.Mutex
 }
 
 type PacketTime struct {
@@ -158,47 +161,64 @@ func (fd *FDImp) StopResponding() {
 // Send heartbeats and receive acks
 func (fd *FDImp) AddMonitor(LocalIpPort string, RemoteIpPort string, LostMsgThresh uint8) (err error) {
 
-	// TODO
 	// check if it exist
-	// for _, m := range fd.MonitorList {
-	// 	if m.RemoteIpPort == RemoteIpPort {
-	// 		m.Conn.Close()
-	// 	}
-
-	// create new monitor
-	monitor := new(Monitor)
-	monitor.LocalIpPort = LocalIpPort
-	monitor.RemoteIpPort = RemoteIpPort
-	monitor.LostMsgThresh = LostMsgThresh
-	monitor.LostMsgCount = 0
-	monitor.HeartBeatRecords = make(map[uint64]PacketTime)
-	monitor.Rtt = 3
-
-	lAddr, err := net.ResolveUDPAddr("udp", LocalIpPort)
-	if err != nil {
-		return errors.New("Connection to local ip failed in AddMonitor")
+	existed := false
+	globalMonitor := new(Monitor)
+	for i := range fd.MonitorList {
+		m := &fd.MonitorList[i]
+		if m.RemoteIpPort == RemoteIpPort || m.LocalIpPort == LocalIpPort {
+			globalMonitor = m
+			m.LostMsgThresh = LostMsgThresh
+			existed = true
+			break
+		}
 	}
 
-	rAddr, err := net.ResolveUDPAddr("udp", RemoteIpPort)
-	if err != nil {
-		return errors.New("Connection to remote ip failed in AddMonitor")
+	if !existed {
+		// create new monitor
+		monitor := new(Monitor)
+		monitor.LocalIpPort = LocalIpPort
+		monitor.RemoteIpPort = RemoteIpPort
+		monitor.LostMsgThresh = LostMsgThresh
+		monitor.LostMsgCount = 0
+		monitor.HeartBeatRecords = make(map[uint64]PacketTime)
+		monitor.Rtt = 3
+
+		lAddr, err := net.ResolveUDPAddr("udp", LocalIpPort)
+		if err != nil {
+			return errors.New("Connection to local ip failed in AddMonitor")
+		}
+
+		rAddr, err := net.ResolveUDPAddr("udp", RemoteIpPort)
+		if err != nil {
+			return errors.New("Connection to remote ip failed in AddMonitor")
+		}
+
+		conn, err := net.DialUDP("udp", lAddr, rAddr)
+		if err != nil {
+			return errors.New("Connection to client failed in AddMonitor")
+		}
+
+		monitor.Conn = conn
+
+		fd.MonitorList = append(fd.MonitorList, *monitor)
+		globalMonitor = monitor
 	}
 
-	conn, err := net.DialUDP("udp", lAddr, rAddr)
-	if err != nil {
-		return errors.New("Connection to client failed in AddMonitor")
+	if !globalMonitor.IsConnOn {
+		globalMonitor.IsConnOn = true
+		go fd.HeartBeatMessenger(globalMonitor)
+		go fd.ReceiveAckRoutine(globalMonitor)
 	}
-
-	monitor.Conn = conn
-
-	fd.MonitorList = append(fd.MonitorList, *monitor)
 
 	return
 }
 
 func (fd *FDImp) RemoveMonitor(RemoteIpPort string) {
-	for _, m := range fd.MonitorList {
+	for i := range fd.MonitorList {
+		m := &fd.MonitorList[i]
 		if m.RemoteIpPort == RemoteIpPort {
+			m.IsConnOn = false
 			m.Conn.Close()
 			return
 		}
@@ -207,7 +227,9 @@ func (fd *FDImp) RemoveMonitor(RemoteIpPort string) {
 }
 
 func (fd *FDImp) StopMonitoring() {
-	for _, m := range fd.MonitorList {
+	for i := range fd.MonitorList {
+		m := &fd.MonitorList[i]
+		m.IsConnOn = false
 		m.Conn.Close()
 	}
 	return
@@ -255,37 +277,56 @@ func (fd *FDImp) ServerMessenger(listener net.Listener) error {
 func (fd *FDImp) HeartBeatMessenger(m *Monitor) error {
 	fmt.Println("start heart beat messenger to " + m.RemoteIpPort)
 
-	id := getNextID()
-	hbToSend := HBeatMessage{fd.Nonce, id}
+	for {
 
-	// Record current time
-	m.HeartBeatRecords[id] = PacketTime{sent: time.Now()}
+		id := getNextID()
+		hbToSend := HBeatMessage{fd.Nonce, id}
 
-	// Set read dead line
-	rttDuration := time.Duration(m.Rtt)
-	duration := time.Duration(rttDuration * time.Second)
-	m.Conn.SetReadDeadline(time.Now().Add(duration))
+		// Record current time
+		m.HeartBeatRecords[id] = PacketTime{sent: time.Now()}
 
-	// Send heart beat
-	err := m.SendHeartBeat(hbToSend)
+		// Send heart beat
+		err := m.SendHeartBeat(hbToSend)
 
-	if err != nil {
-		return errors.New("cannot send heart beat")
+		if err != nil {
+			return errors.New("cannot send heart beat")
+		}
+
 	}
-
-	// Receive ack within rtt?
-
-	// No, record one lost msg
-	m.LostMsgCount++
-	// Yes, reset lost msg to 0
-	m.LostMsgCount = 0
-	// Yes, update Rtt for this monitor
-	var elasped = time.Now().Sub(m.HeartBeatRecords[id].sent).Seconds()
-	var average = (elasped + m.Rtt) / 2
-	m.Rtt = average
 
 	fmt.Println("end heart beat messenger to " + m.RemoteIpPort)
 	return nil
+}
+
+func (fd *FDImp) ReceiveAckRoutine(m *Monitor) error {
+
+	for {
+		// Set read dead line
+		rttDuration := time.Duration(m.Rtt)
+		duration := time.Duration(rttDuration * time.Second)
+		m.Conn.SetReadDeadline(time.Now().Add(duration))
+
+		// wait for ack
+		ack, err := m.ReceiveAck()
+		m.Mux.Lock()
+		if err == nil {
+			// Yes, reset lost msg to 0
+			m.LostMsgCount = 0
+			// Yes, update Rtt for this monitor
+			var elasped = time.Now().Sub(m.HeartBeatRecords[ack.HBEatSeqNum].sent).Seconds()
+			var average = (elasped + m.Rtt) / 2
+			m.Rtt = average
+		} else {
+			// No, record one lost msg
+			m.LostMsgCount++
+		}
+		m.Mux.Unlock()
+
+		// timeout if over time out threshhold
+		if m.LostMsgCount == m.LostMsgThresh {
+			return errors.New("too many timeout")
+		}
+	}
 }
 
 //===================================================================
