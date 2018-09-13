@@ -249,6 +249,7 @@ func (fd *FDImp) ServerMessenger(listener net.Listener) error {
 	for err == nil {
 		conn, err := listener.Accept()
 		if err != nil {
+			conn.Close()
 			return errors.New("unable to accept new heartbeat")
 		}
 		fd.ServerConn = conn
@@ -256,6 +257,7 @@ func (fd *FDImp) ServerMessenger(listener net.Listener) error {
 		hb, err := fd.ReceiveHeartBeat()
 
 		if err != nil {
+			conn.Close()
 			return errors.New("cannot receive heartbeat for lib")
 		}
 
@@ -265,12 +267,12 @@ func (fd *FDImp) ServerMessenger(listener net.Listener) error {
 
 		err = fd.SendAck(ack)
 		if err != nil {
+			conn.Close()
 			return errors.New("cannot send ack from lib")
 		}
 
 		conn, err = listener.Accept()
 	}
-
 	fmt.Println("server messenger closed")
 
 	return nil
@@ -278,10 +280,10 @@ func (fd *FDImp) ServerMessenger(listener net.Listener) error {
 
 func (fd *FDImp) HeartBeatMessenger(m *Monitor, quit chan bool) error {
 	fmt.Println("start heart beat messenger to " + m.RemoteIpPort)
-
 	for {
 		select {
 		case <-quit:
+			m.Conn.Close()
 			return nil
 		default:
 			id := getNextID()
@@ -294,20 +296,18 @@ func (fd *FDImp) HeartBeatMessenger(m *Monitor, quit chan bool) error {
 			err := m.SendHeartBeat(hbToSend)
 
 			if err != nil {
+				m.Conn.Close()
 				return errors.New("cannot send heart beat")
 			}
 		}
 	}
-
-	fmt.Println("end heart beat messenger to " + m.RemoteIpPort)
-	return nil
 }
 
 func (fd *FDImp) ReceiveAckRoutine(m *Monitor, quit chan bool) error {
-
 	for {
 		select {
 		case <-quit:
+			m.Conn.Close()
 			return nil
 		default:
 			// Set read dead line
@@ -335,6 +335,7 @@ func (fd *FDImp) ReceiveAckRoutine(m *Monitor, quit chan bool) error {
 			if m.LostMsgCount == m.LostMsgThresh {
 				failure := FailureDetected{m.RemoteIpPort, time.Now()}
 				fd.Notify <- failure
+				m.Conn.Close()
 				return errors.New("failure detected")
 			}
 		}
