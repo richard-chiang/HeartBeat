@@ -92,6 +92,7 @@ type FDImp struct {
 }
 
 type Monitor struct {
+	Mux              sync.Mutex
 	Conn             net.Conn
 	IsConnOn         bool
 	LocalIpPort      string
@@ -100,7 +101,8 @@ type Monitor struct {
 	LostMsgCount     uint8
 	HeartBeatRecords map[uint64]PacketTime
 	Rtt              float64
-	Mux              sync.Mutex
+	HBQuitChan       chan bool
+	AckQuitChan      chan bool
 }
 
 type PacketTime struct {
@@ -183,6 +185,8 @@ func (fd *FDImp) AddMonitor(LocalIpPort string, RemoteIpPort string, LostMsgThre
 		monitor.LostMsgCount = 0
 		monitor.HeartBeatRecords = make(map[uint64]PacketTime)
 		monitor.Rtt = 3
+		monitor.AckQuitChan = make(chan bool)
+		monitor.HBQuitChan = make(chan bool)
 
 		lAddr, err := net.ResolveUDPAddr("udp", LocalIpPort)
 		if err != nil {
@@ -207,8 +211,8 @@ func (fd *FDImp) AddMonitor(LocalIpPort string, RemoteIpPort string, LostMsgThre
 
 	if !globalMonitor.IsConnOn {
 		globalMonitor.IsConnOn = true
-		go fd.HeartBeatMessenger(globalMonitor)
-		go fd.ReceiveAckRoutine(globalMonitor)
+		go fd.HeartBeatMessenger(globalMonitor, globalMonitor.HBQuitChan)
+		go fd.ReceiveAckRoutine(globalMonitor, globalMonitor.AckQuitChan)
 	}
 
 	return
@@ -218,8 +222,7 @@ func (fd *FDImp) RemoveMonitor(RemoteIpPort string) {
 	for i := range fd.MonitorList {
 		m := &fd.MonitorList[i]
 		if m.RemoteIpPort == RemoteIpPort {
-			m.IsConnOn = false
-			m.Conn.Close()
+			m.CloseMonitor()
 			return
 		}
 	}
@@ -229,8 +232,7 @@ func (fd *FDImp) RemoveMonitor(RemoteIpPort string) {
 func (fd *FDImp) StopMonitoring() {
 	for i := range fd.MonitorList {
 		m := &fd.MonitorList[i]
-		m.IsConnOn = false
-		m.Conn.Close()
+		m.CloseMonitor()
 	}
 	return
 }
@@ -274,59 +276,67 @@ func (fd *FDImp) ServerMessenger(listener net.Listener) error {
 	return nil
 }
 
-func (fd *FDImp) HeartBeatMessenger(m *Monitor) error {
+func (fd *FDImp) HeartBeatMessenger(m *Monitor, quit chan bool) error {
 	fmt.Println("start heart beat messenger to " + m.RemoteIpPort)
 
 	for {
+		select {
+		case <-quit:
+			return nil
+		default:
+			id := getNextID()
+			hbToSend := HBeatMessage{fd.Nonce, id}
 
-		id := getNextID()
-		hbToSend := HBeatMessage{fd.Nonce, id}
+			// Record current time
+			m.HeartBeatRecords[id] = PacketTime{sent: time.Now()}
 
-		// Record current time
-		m.HeartBeatRecords[id] = PacketTime{sent: time.Now()}
+			// Send heart beat
+			err := m.SendHeartBeat(hbToSend)
 
-		// Send heart beat
-		err := m.SendHeartBeat(hbToSend)
-
-		if err != nil {
-			return errors.New("cannot send heart beat")
+			if err != nil {
+				return errors.New("cannot send heart beat")
+			}
 		}
-
 	}
 
 	fmt.Println("end heart beat messenger to " + m.RemoteIpPort)
 	return nil
 }
 
-func (fd *FDImp) ReceiveAckRoutine(m *Monitor) error {
+func (fd *FDImp) ReceiveAckRoutine(m *Monitor, quit chan bool) error {
 
 	for {
-		// Set read dead line
-		rttDuration := time.Duration(m.Rtt)
-		duration := time.Duration(rttDuration * time.Second)
-		m.Conn.SetReadDeadline(time.Now().Add(duration))
+		select {
+		case <-quit:
+			return nil
+		default:
+			// Set read dead line
+			rttDuration := time.Duration(m.Rtt)
+			duration := time.Duration(rttDuration * time.Second)
+			m.Conn.SetReadDeadline(time.Now().Add(duration))
 
-		// wait for ack
-		ack, err := m.ReceiveAck()
-		m.Mux.Lock()
-		if err == nil {
-			// Yes, reset lost msg to 0
-			m.LostMsgCount = 0
-			// Yes, update Rtt for this monitor
-			var elasped = time.Now().Sub(m.HeartBeatRecords[ack.HBEatSeqNum].sent).Seconds()
-			var average = (elasped + m.Rtt) / 2
-			m.Rtt = average
-		} else {
-			// No, record one lost msg
-			m.LostMsgCount++
-		}
-		m.Mux.Unlock()
+			// wait for ack
+			ack, err := m.ReceiveAck()
+			m.Mux.Lock()
+			if err == nil {
+				// Yes, reset lost msg to 0
+				m.LostMsgCount = 0
+				// Yes, update Rtt for this monitor
+				var elasped = time.Now().Sub(m.HeartBeatRecords[ack.HBEatSeqNum].sent).Seconds()
+				var average = (elasped + m.Rtt) / 2
+				m.Rtt = average
+			} else {
+				// No, record one lost msg
+				m.LostMsgCount++
+			}
+			m.Mux.Unlock()
 
-		// timeout if over time out threshhold
-		if m.LostMsgCount == m.LostMsgThresh {
-			failure := FailureDetected{m.RemoteIpPort, time.Now()}
-			fd.Notify <- failure
-			return errors.New("failure detected")
+			// timeout if over time out threshhold
+			if m.LostMsgCount == m.LostMsgThresh {
+				failure := FailureDetected{m.RemoteIpPort, time.Now()}
+				fd.Notify <- failure
+				return errors.New("failure detected")
+			}
 		}
 	}
 }
@@ -415,4 +425,11 @@ func getNextID() uint64 {
 	atomic.AddUint64(numHolder, 1)
 	num := atomic.LoadUint64(numHolder)
 	return num
+}
+
+func (m *Monitor) CloseMonitor() {
+	m.IsConnOn = false
+	m.AckQuitChan <- true
+	m.HBQuitChan <- true
+	m.Conn.Close()
 }
