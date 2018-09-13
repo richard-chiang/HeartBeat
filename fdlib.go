@@ -85,7 +85,7 @@ var nextNumber uint64 = 0
 
 type FDImp struct {
 	Nonce       uint64
-	Notify      <-chan FailureDetected
+	Notify      chan FailureDetected
 	ServerConn  net.Conn
 	IsServerOn  bool
 	MonitorList []Monitor
@@ -124,14 +124,14 @@ func Initialize(EpochNonce uint64, ChCapacity uint8) (fd FD, notifyCh <-chan Fai
 		return nil, nil, errors.New("already initialized, but not anymore after this error")
 	}
 
-	notifyCh = make(chan FailureDetected, ChCapacity)
+	notify := make(chan FailureDetected, ChCapacity)
 
 	fd = &FDImp{
 		Nonce:  EpochNonce,
-		Notify: notifyCh}
+		Notify: notify}
 
 	isInitialized = true
-	return
+	return fd, notify, nil
 }
 
 // Receive heartbeat and send acks
@@ -243,7 +243,7 @@ func (fd *FDImp) StopMonitoring() {
 
 func (fd *FDImp) ServerMessenger(listener net.Listener) error {
 	fmt.Println("server messenger open")
-	var err error = nil
+	var err error
 	for err == nil {
 		conn, err := listener.Accept()
 		if err != nil {
@@ -324,7 +324,9 @@ func (fd *FDImp) ReceiveAckRoutine(m *Monitor) error {
 
 		// timeout if over time out threshhold
 		if m.LostMsgCount == m.LostMsgThresh {
-			return errors.New("too many timeout")
+			failure := FailureDetected{m.RemoteIpPort, time.Now()}
+			fd.Notify <- failure
+			return errors.New("failure detected")
 		}
 	}
 }
