@@ -168,7 +168,7 @@ func (fd *FDImp) AddMonitor(LocalIpPort string, RemoteIpPort string, LostMsgThre
 	globalMonitor := new(Monitor)
 	for i := range fd.MonitorList {
 		m := &fd.MonitorList[i]
-		if m.RemoteIpPort == RemoteIpPort || m.LocalIpPort == LocalIpPort {
+		if m.RemoteIpPort == RemoteIpPort && m.LocalIpPort == LocalIpPort && m.LostMsgThresh != LostMsgThresh {
 			globalMonitor = m
 			m.LostMsgThresh = LostMsgThresh
 			existed = true
@@ -322,8 +322,18 @@ func (fd *FDImp) ReceiveAckRoutine(m *Monitor, quit chan bool) error {
 				// Yes, reset lost msg to 0
 				m.LostMsgCount = 0
 				// Yes, update Rtt for this monitor
-				var elasped = time.Now().Sub(m.HeartBeatRecords[ack.HBEatSeqNum].sent).Seconds()
+				// 1. update the packet receive time
+				pt := m.HeartBeatRecords[ack.HBEatSeqNum]
+				pt.receive = time.Now()
+				m.HeartBeatRecords[ack.HBEatSeqNum] = pt
+				// 2. use the receive time to calculate rtt
+				packet := m.HeartBeatRecords[ack.HBEatSeqNum]
+				sentTime := packet.sent
+				receiveTime := packet.receive
+				var elasped = receiveTime.Sub(sentTime).Seconds()
 				var average = (elasped + m.Rtt) / 2
+
+				// 3. update rtt
 				m.Rtt = average
 			} else {
 				// No, record one lost msg
