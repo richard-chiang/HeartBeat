@@ -223,7 +223,6 @@ func (fd *FDImp) RemoveMonitor(RemoteIpPort string) {
 		m := &fd.MonitorList[i]
 		if m.RemoteIpPort == RemoteIpPort {
 			m.CloseMonitor()
-			return
 		}
 	}
 	return
