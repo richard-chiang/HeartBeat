@@ -93,7 +93,7 @@ type FDImp struct {
 
 type Monitor struct {
 	Mux              sync.Mutex
-	Conn             net.PacketConn
+	Conn             *net.UDPConn
 	IsConnOn         bool
 	LocalIpPort      string
 	RemoteIpPort     string
@@ -281,7 +281,7 @@ func (fd *FDImp) HeartBeatMessenger(m *Monitor, quit chan bool) error {
 			m.HeartBeatRecords[id] = PacketTime{sent: time.Now()}
 
 			// Send heart beat
-			err := m.SendHeartBeat(hbToSend, addr)
+			err := m.SendHeartBeat(hbToSend)
 
 			if err != nil {
 				return errors.New("cannot send heart beat")
@@ -303,7 +303,7 @@ func (fd *FDImp) ReceiveAckRoutine(m *Monitor, quit chan bool) error {
 			m.Conn.SetReadDeadline(time.Now().Add(duration))
 
 			// wait for ack
-			ack, addr, err := m.ReceiveAck()
+			ack, err := m.ReceiveAck()
 			m.Mux.Lock()
 			if err == nil {
 				// Yes, reset lost msg to 0
@@ -357,7 +357,7 @@ func (fd *FDImp) SendAck(ack AckMessage, addr net.Addr) {
 	}
 }
 
-func (m Monitor) SendHeartBeat(hb HBeatMessage, addr net.Addr) error {
+func (m Monitor) SendHeartBeat(hb HBeatMessage) error {
 	var buf bytes.Buffer
 
 	if err := gob.NewEncoder(&buf).Encode(hb); err != nil {
@@ -365,7 +365,7 @@ func (m Monitor) SendHeartBeat(hb HBeatMessage, addr net.Addr) error {
 		return err
 	}
 
-	if _, err := m.Conn.WriteTo(buf.Bytes(), addr); err != nil {
+	if _, err := m.Conn.Write(buf.Bytes()); err != nil {
 		return err
 	}
 	return nil
@@ -394,12 +394,12 @@ func (fd *FDImp) ReceiveHeartBeat() (HBeatMessage, net.Addr, error) {
 	return *msg, addr, nil
 }
 
-func (m Monitor) ReceiveAck() (AckMessage, net.Addr, error) {
+func (m Monitor) ReceiveAck() (AckMessage, error) {
 	buf := make([]byte, 1024)
-	n, addr, err := m.Conn.ReadFrom(buf)
+	n, _, err := m.Conn.ReadFrom(buf)
 
 	if err != nil {
-		return AckMessage{}, nil, err
+		return AckMessage{}, err
 	}
 
 	// bytes -> Buffer
@@ -408,7 +408,7 @@ func (m Monitor) ReceiveAck() (AckMessage, net.Addr, error) {
 
 	decoder := gob.NewDecoder(reader)
 	decoder.Decode(msg)
-	return *msg, addr, nil
+	return *msg, nil
 }
 
 //===================================================================
