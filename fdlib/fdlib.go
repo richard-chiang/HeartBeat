@@ -141,6 +141,7 @@ func (fd *FDImp) StartResponding(LocalIpPort string) (err error) {
 	if fd.IsServerOn {
 		return errors.New("already responding")
 	}
+	fmt.Println("local ip" + LocalIpPort)
 	listener, err := net.Listen("udp", LocalIpPort)
 	if err != nil {
 		fmt.Println(err.Error())
