@@ -86,7 +86,7 @@ var nextNumber uint64 = 0
 type FDImp struct {
 	Nonce       uint64
 	Notify      chan FailureDetected
-	ServerConn  net.Conn
+	ServerConn  net.PacketConn
 	IsServerOn  bool
 	MonitorList []Monitor
 }
@@ -142,15 +142,15 @@ func (fd *FDImp) StartResponding(LocalIpPort string) (err error) {
 		return errors.New("already responding")
 	}
 	fmt.Println("local ip" + LocalIpPort)
-	listener, err := net.Listen("udp", LocalIpPort)
-	if err != nil {
-		fmt.Println(err.Error())
-		return errors.New("cannot listen to udp in start respond")
-	}
 
+	pc, err := net.ListenPacket("udp", LocalIpPort)
+	if err != nil {
+		return errors.New("cannot listen for packet")
+	}
+	fd.ServerConn = pc
 	fd.IsServerOn = true
 
-	go fd.ServerMessenger(listener)
+	go fd.ServerMessenger(pc)
 	return
 }
 
@@ -244,21 +244,14 @@ func (fd *FDImp) StopMonitoring() {
 //===================================================================
 //===================================================================
 
-func (fd *FDImp) ServerMessenger(listener net.Listener) error {
+func (fd *FDImp) ServerMessenger(listener net.PacketConn) error {
 	fmt.Println("server messenger open")
 	var err error
 	for err == nil {
-		conn, err := listener.Accept()
-		if err != nil {
-			conn.Close()
-			return errors.New("unable to accept new heartbeat")
-		}
-		fd.ServerConn = conn
 
-		hb, err := fd.ReceiveHeartBeat()
+		hb, addr, err := fd.ReceiveHeartBeat()
 
 		if err != nil {
-			conn.Close()
 			return errors.New("cannot receive heartbeat for lib")
 		}
 
@@ -266,13 +259,7 @@ func (fd *FDImp) ServerMessenger(listener net.Listener) error {
 			HBEatEpochNonce: hb.EpochNonce,
 			HBEatSeqNum:     hb.SeqNum}
 
-		err = fd.SendAck(ack)
-		if err != nil {
-			conn.Close()
-			return errors.New("cannot send ack from lib")
-		}
-
-		conn, err = listener.Accept()
+		go fd.SendAck(ack, addr)
 	}
 	fmt.Println("server messenger closed")
 
@@ -297,7 +284,6 @@ func (fd *FDImp) HeartBeatMessenger(m *Monitor, quit chan bool) error {
 			err := m.SendHeartBeat(hbToSend)
 
 			if err != nil {
-				m.Conn.Close()
 				return errors.New("cannot send heart beat")
 			}
 		}
@@ -359,18 +345,16 @@ func (fd *FDImp) ReceiveAckRoutine(m *Monitor, quit chan bool) error {
 //===================================================================
 //===================================================================
 
-func (fd *FDImp) SendAck(ack AckMessage) error {
+func (fd *FDImp) SendAck(ack AckMessage, addr net.Addr) {
 	var buf bytes.Buffer
 
 	if err := gob.NewEncoder(&buf).Encode(ack); err != nil {
-		fmt.Println(err.Error())
-		return err
+		fmt.Println("cannot encode ack")
 	}
 
-	if _, err := fd.ServerConn.Write(buf.Bytes()); err != nil {
-		return err
+	if _, err := fd.ServerConn.WriteTo(buf.Bytes(), addr); err != nil {
+		fmt.Println("cannot send ack")
 	}
-	return nil
 }
 
 func (m Monitor) SendHeartBeat(hb HBeatMessage) error {
@@ -393,12 +377,12 @@ func (m Monitor) SendHeartBeat(hb HBeatMessage) error {
 //===================================================================
 //===================================================================
 
-func (fd *FDImp) ReceiveHeartBeat() (HBeatMessage, error) {
+func (fd *FDImp) ReceiveHeartBeat() (HBeatMessage, net.Addr, error) {
 	buf := make([]byte, 1024)
-	n, err := fd.ServerConn.Read(buf)
+	n, addr, err := fd.ServerConn.ReadFrom(buf)
 
 	if err != nil {
-		return HBeatMessage{}, err
+		return HBeatMessage{}, nil, err
 	}
 
 	// bytes -> Buffer
@@ -407,7 +391,7 @@ func (fd *FDImp) ReceiveHeartBeat() (HBeatMessage, error) {
 
 	decoder := gob.NewDecoder(reader)
 	decoder.Decode(msg)
-	return *msg, nil
+	return *msg, addr, nil
 }
 
 func (m Monitor) ReceiveAck() (AckMessage, error) {
