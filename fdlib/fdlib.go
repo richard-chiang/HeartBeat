@@ -143,6 +143,7 @@ func (fd *FDImp) StartResponding(LocalIpPort string) (err error) {
 	}
 	listener, err := net.Listen("udp", LocalIpPort)
 	if err != nil {
+		fmt.Println(err.Error())
 		return errors.New("cannot listen to udp in start respond")
 	}
 

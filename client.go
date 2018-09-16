@@ -19,7 +19,7 @@ import "time"
 
 func main() {
 	// Local (127.0.0.1) hardcoded IPs to simplify testing.
-	localIpPort := "127.0.0.1:8080"
+	localIpPort := "128.189.117.203:6142"
 	toMonitorIpPort := "198.162.33.23:9999" // TODO: change this to remote node
 	var lostMsgThresh uint8 = 5
 
