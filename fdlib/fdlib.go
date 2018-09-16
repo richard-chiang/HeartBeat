@@ -93,7 +93,7 @@ type FDImp struct {
 
 type Monitor struct {
 	Mux              sync.Mutex
-	Conn             net.Conn
+	Conn             net.PacketConn
 	IsConnOn         bool
 	LocalIpPort      string
 	RemoteIpPort     string
@@ -281,7 +281,7 @@ func (fd *FDImp) HeartBeatMessenger(m *Monitor, quit chan bool) error {
 			m.HeartBeatRecords[id] = PacketTime{sent: time.Now()}
 
 			// Send heart beat
-			err := m.SendHeartBeat(hbToSend)
+			err := m.SendHeartBeat(hbToSend, addr)
 
 			if err != nil {
 				return errors.New("cannot send heart beat")
@@ -303,7 +303,7 @@ func (fd *FDImp) ReceiveAckRoutine(m *Monitor, quit chan bool) error {
 			m.Conn.SetReadDeadline(time.Now().Add(duration))
 
 			// wait for ack
-			ack, err := m.ReceiveAck()
+			ack, addr, err := m.ReceiveAck()
 			m.Mux.Lock()
 			if err == nil {
 				// Yes, reset lost msg to 0
@@ -357,7 +357,7 @@ func (fd *FDImp) SendAck(ack AckMessage, addr net.Addr) {
 	}
 }
 
-func (m Monitor) SendHeartBeat(hb HBeatMessage) error {
+func (m Monitor) SendHeartBeat(hb HBeatMessage, addr net.Addr) error {
 	var buf bytes.Buffer
 
 	if err := gob.NewEncoder(&buf).Encode(hb); err != nil {
@@ -365,7 +365,7 @@ func (m Monitor) SendHeartBeat(hb HBeatMessage) error {
 		return err
 	}
 
-	if _, err := m.Conn.Write(buf.Bytes()); err != nil {
+	if _, err := m.Conn.WriteTo(buf.Bytes(), addr); err != nil {
 		return err
 	}
 	return nil
@@ -394,12 +394,12 @@ func (fd *FDImp) ReceiveHeartBeat() (HBeatMessage, net.Addr, error) {
 	return *msg, addr, nil
 }
 
-func (m Monitor) ReceiveAck() (AckMessage, error) {
+func (m Monitor) ReceiveAck() (AckMessage, net.Addr, error) {
 	buf := make([]byte, 1024)
-	n, err := m.Conn.Read(buf)
+	n, addr, err := m.Conn.ReadFrom(buf)
 
 	if err != nil {
-		return AckMessage{}, err
+		return AckMessage{}, nil, err
 	}
 
 	// bytes -> Buffer
@@ -408,7 +408,7 @@ func (m Monitor) ReceiveAck() (AckMessage, error) {
 
 	decoder := gob.NewDecoder(reader)
 	decoder.Decode(msg)
-	return *msg, nil
+	return *msg, addr, nil
 }
 
 //===================================================================
