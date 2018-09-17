@@ -175,7 +175,9 @@ func (fd *FDImp) AddMonitor(LocalIpPort string, RemoteIpPort string, LostMsgThre
 		m := &fd.MonitorList[i]
 		if m.RemoteIpPort == RemoteIpPort && m.LocalIpPort == LocalIpPort && m.LostMsgThresh != LostMsgThresh {
 			globalMonitor = m
+			m.Mux.Lock()
 			m.LostMsgThresh = LostMsgThresh
+			m.Mux.Unlock()
 			existed = true
 			break
 		}
