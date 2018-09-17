@@ -157,6 +157,7 @@ func (fd *FDImp) StartResponding(LocalIpPort string) (err error) {
 }
 
 func (fd *FDImp) StopResponding() {
+	fd.QuitChan <- true
 	err := fd.ServerConn.Close()
 	if err != nil {
 		fmt.Println(err.Error())
@@ -251,7 +252,6 @@ func (fd *FDImp) ServerMessenger() error {
 	for err == nil {
 		select {
 		case <-fd.QuitChan:
-			fd.ServerConn.Close()
 			fd.IsServerOn = false
 			return nil
 
@@ -277,7 +277,6 @@ func (fd *FDImp) HeartBeatMessenger(m *Monitor, quit chan bool) error {
 	for {
 		select {
 		case <-quit:
-			m.Conn.Close()
 			return nil
 		default:
 			id := getNextID()
@@ -300,7 +299,6 @@ func (fd *FDImp) ReceiveAckRoutine(m *Monitor, quit chan bool) error {
 	for {
 		select {
 		case <-quit:
-			m.Conn.Close()
 			return nil
 		default:
 			// Set read dead line
@@ -338,7 +336,7 @@ func (fd *FDImp) ReceiveAckRoutine(m *Monitor, quit chan bool) error {
 			if m.LostMsgCount == m.LostMsgThresh {
 				failure := FailureDetected{m.RemoteIpPort, time.Now()}
 				fd.Notify <- failure
-				m.Conn.Close()
+				m.CloseMonitor()
 				return errors.New("failure detected")
 			}
 		}
