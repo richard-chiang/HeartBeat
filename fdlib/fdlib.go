@@ -146,6 +146,7 @@ func (fd *FDImp) StartResponding(LocalIpPort string) (err error) {
 
 	pc, err := net.ListenPacket("udp", LocalIpPort)
 	if err != nil {
+		fmt.Println(err.Error())
 		return errors.New("cannot listen for packet")
 	}
 	fd.ServerConn = pc
@@ -197,16 +198,19 @@ func (fd *FDImp) AddMonitor(LocalIpPort string, RemoteIpPort string, LostMsgThre
 
 		lAddr, err := net.ResolveUDPAddr("udp", LocalIpPort)
 		if err != nil {
+			fmt.Println(err.Error())
 			return errors.New("Connection to local ip failed in AddMonitor")
 		}
 
 		rAddr, err := net.ResolveUDPAddr("udp", RemoteIpPort)
 		if err != nil {
+			fmt.Println(err.Error())
 			return errors.New("Connection to remote ip failed in AddMonitor")
 		}
 
 		conn, err := net.DialUDP("udp", lAddr, rAddr)
 		if err != nil {
+			fmt.Println(err.Error())
 			return errors.New("Connection to client failed in AddMonitor")
 		}
 
@@ -261,6 +265,7 @@ func (fd *FDImp) ServerMessenger() error {
 			hb, addr, err := fd.ReceiveHeartBeat()
 
 			if err != nil {
+				fmt.Println(err.Error())
 				return errors.New("cannot receive heartbeat for lib")
 			}
 
@@ -291,6 +296,7 @@ func (fd *FDImp) HeartBeatMessenger(m *Monitor, quit chan bool) error {
 			err := m.SendHeartBeat(hbToSend)
 
 			if err != nil {
+				fmt.Println(err.Error())
 				return errors.New("cannot send heart beat")
 			}
 		}
@@ -355,10 +361,12 @@ func (fd *FDImp) SendAck(ack AckMessage, addr net.Addr) {
 	var buf bytes.Buffer
 
 	if err := gob.NewEncoder(&buf).Encode(ack); err != nil {
+		fmt.Println(err.Error())
 		fmt.Println("cannot encode ack")
 	}
 
 	if _, err := fd.ServerConn.WriteTo(buf.Bytes(), addr); err != nil {
+		fmt.Println(err.Error())
 		fmt.Println("cannot send ack")
 	}
 }
@@ -372,6 +380,7 @@ func (m Monitor) SendHeartBeat(hb HBeatMessage) error {
 	}
 
 	if _, err := m.Conn.Write(buf.Bytes()); err != nil {
+		fmt.Println(err.Error())
 		return err
 	}
 	return nil
@@ -388,6 +397,7 @@ func (fd *FDImp) ReceiveHeartBeat() (HBeatMessage, net.Addr, error) {
 	n, addr, err := fd.ServerConn.ReadFrom(buf)
 
 	if err != nil {
+		fmt.Println(err.Error())
 		return HBeatMessage{}, nil, err
 	}
 
@@ -405,6 +415,7 @@ func (m Monitor) ReceiveAck() (AckMessage, error) {
 	n, _, err := m.Conn.ReadFrom(buf)
 
 	if err != nil {
+		fmt.Println(err.Error())
 		return AckMessage{}, err
 	}
 
