@@ -87,6 +87,7 @@ type FDImp struct {
 	Nonce       uint64
 	Notify      chan FailureDetected
 	ServerConn  net.PacketConn
+	QuitChan    chan bool
 	IsServerOn  bool
 	MonitorList []Monitor
 }
@@ -149,8 +150,9 @@ func (fd *FDImp) StartResponding(LocalIpPort string) (err error) {
 	}
 	fd.ServerConn = pc
 	fd.IsServerOn = true
+	fd.QuitChan = make(chan bool)
 
-	go fd.ServerMessenger(pc)
+	go fd.ServerMessenger()
 	return
 }
 
@@ -244,30 +246,34 @@ func (fd *FDImp) StopMonitoring() {
 //===================================================================
 //===================================================================
 
-func (fd *FDImp) ServerMessenger(listener net.PacketConn) error {
-	fmt.Println("server messenger open")
+func (fd *FDImp) ServerMessenger() error {
 	var err error
 	for err == nil {
+		select {
+		case <-fd.QuitChan:
+			fd.ServerConn.Close()
+			fd.IsServerOn = false
+			return nil
 
-		hb, addr, err := fd.ReceiveHeartBeat()
+		default:
+			hb, addr, err := fd.ReceiveHeartBeat()
 
-		if err != nil {
-			return errors.New("cannot receive heartbeat for lib")
+			if err != nil {
+				return errors.New("cannot receive heartbeat for lib")
+			}
+
+			ack := AckMessage{
+				HBEatEpochNonce: hb.EpochNonce,
+				HBEatSeqNum:     hb.SeqNum}
+
+			go fd.SendAck(ack, addr)
 		}
-
-		ack := AckMessage{
-			HBEatEpochNonce: hb.EpochNonce,
-			HBEatSeqNum:     hb.SeqNum}
-
-		go fd.SendAck(ack, addr)
 	}
-	fmt.Println("server messenger closed")
 
 	return nil
 }
 
 func (fd *FDImp) HeartBeatMessenger(m *Monitor, quit chan bool) error {
-	fmt.Println("start heart beat messenger to " + m.RemoteIpPort)
 	for {
 		select {
 		case <-quit:
