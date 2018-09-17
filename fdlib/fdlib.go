@@ -290,8 +290,9 @@ func (fd *FDImp) HeartBeatMessenger(m *Monitor, quit chan bool) error {
 			hbToSend := HBeatMessage{fd.Nonce, id}
 
 			// Record current time
+			m.Mux.Lock()
 			m.HeartBeatRecords[id] = PacketTime{sent: time.Now()}
-
+			m.Mux.Unlock()
 			// Send heart beat
 			err := m.SendHeartBeat(hbToSend)
 
