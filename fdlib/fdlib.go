@@ -17,6 +17,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -107,8 +108,9 @@ type Monitor struct {
 }
 
 type PacketTime struct {
-	sent    time.Time
-	receive time.Time
+	Sent    time.Time
+	Receive time.Time
+	IsSet   bool
 }
 
 //===================================================================
@@ -223,7 +225,6 @@ func (fd *FDImp) AddMonitor(LocalIpPort string, RemoteIpPort string, LostMsgThre
 	if !globalMonitor.IsConnOn {
 		globalMonitor.IsConnOn = true
 		go fd.HeartBeatMessenger(globalMonitor, globalMonitor.HBQuitChan)
-		go fd.ReceiveAckRoutine(globalMonitor, globalMonitor.AckQuitChan)
 	}
 
 	return
@@ -291,7 +292,7 @@ func (fd *FDImp) HeartBeatMessenger(m *Monitor, quit chan bool) error {
 
 			// Record current time
 			m.Mux.Lock()
-			m.HeartBeatRecords[id] = PacketTime{sent: time.Now()}
+			m.HeartBeatRecords[id] = PacketTime{Sent: time.Now(), IsSet: false}
 			m.Mux.Unlock()
 			// Send heart beat
 			err := m.SendHeartBeat(hbToSend)
@@ -300,14 +301,22 @@ func (fd *FDImp) HeartBeatMessenger(m *Monitor, quit chan bool) error {
 				fmt.Println(err.Error())
 				return errors.New("cannot send heart beat")
 			}
+
+			go fd.ReceiveAckRoutine(m, m.AckQuitChan)
 		}
+
+		m.Mux.Lock()
+		// sleepTime := time.Duration(m.Rtt)
+		m.Mux.Unlock()
+		fmt.Println("sleep for " + strconv.FormatFloat(m.Rtt, 'f', 6, 64) + " seconds")
+		time.Sleep(3 * time.Second)
 	}
 }
 
-func (fd *FDImp) ReceiveAckRoutine(m *Monitor, quit chan bool) error {
+func (fd *FDImp) ReceiveAckRoutine(m *Monitor) error {
 	for {
 		select {
-		case <-quit:
+		case <-m.AckQuitChan:
 			return nil
 		default:
 			// Set read dead line
@@ -324,12 +333,13 @@ func (fd *FDImp) ReceiveAckRoutine(m *Monitor, quit chan bool) error {
 				// Yes, update Rtt for this monitor
 				// 1. update the packet receive time
 				pt := m.HeartBeatRecords[ack.HBEatSeqNum]
-				pt.receive = time.Now()
+				pt.Receive = time.Now()
+				pt.IsSet = true
 				m.HeartBeatRecords[ack.HBEatSeqNum] = pt
 				// 2. use the receive time to calculate rtt
 				packet := m.HeartBeatRecords[ack.HBEatSeqNum]
-				sentTime := packet.sent
-				receiveTime := packet.receive
+				sentTime := packet.Sent
+				receiveTime := packet.Receive
 				var elasped = receiveTime.Sub(sentTime).Seconds()
 				var average = (elasped + m.Rtt) / 2
 
@@ -338,16 +348,15 @@ func (fd *FDImp) ReceiveAckRoutine(m *Monitor, quit chan bool) error {
 			} else {
 				// No, record one lost msg
 				m.LostMsgCount++
+				// timeout if over time out threshhold
+				if m.LostMsgCount == m.LostMsgThresh {
+					failure := FailureDetected{m.RemoteIpPort, time.Now()}
+					fd.Notify <- failure
+					m.CloseMonitor()
+					return errors.New("failure detected")
+				}
 			}
 			m.Mux.Unlock()
-
-			// timeout if over time out threshhold
-			if m.LostMsgCount == m.LostMsgThresh {
-				failure := FailureDetected{m.RemoteIpPort, time.Now()}
-				fd.Notify <- failure
-				m.CloseMonitor()
-				return errors.New("failure detected")
-			}
 		}
 	}
 }
@@ -379,6 +388,8 @@ func (m Monitor) SendHeartBeat(hb HBeatMessage) error {
 		fmt.Println(err.Error())
 		return err
 	}
+
+	fmt.Println("send heartbeat " + strconv.Itoa(int(hb.SeqNum)))
 
 	if _, err := m.Conn.Write(buf.Bytes()); err != nil {
 		fmt.Println(err.Error())
@@ -426,6 +437,7 @@ func (m Monitor) ReceiveAck() (AckMessage, error) {
 
 	decoder := gob.NewDecoder(reader)
 	decoder.Decode(msg)
+	fmt.Println("receive ack " + strconv.Itoa(int(msg.HBEatSeqNum)))
 	return *msg, nil
 }
 
