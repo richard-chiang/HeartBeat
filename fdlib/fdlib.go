@@ -105,6 +105,8 @@ type Monitor struct {
 	Rtt              float64
 	HBQuitChan       chan bool
 	AckQuitChan      chan bool
+	HBSentChan       chan bool
+	TimeOutOrAck     chan bool
 }
 
 type PacketTime struct {
@@ -176,6 +178,7 @@ func (fd *FDImp) AddMonitor(LocalIpPort string, RemoteIpPort string, LostMsgThre
 	globalMonitor := new(Monitor)
 	for i := range fd.MonitorList {
 		m := &fd.MonitorList[i]
+		fmt.Println("add monitor check " + m.RemoteIpPort)
 		if m.RemoteIpPort == RemoteIpPort && m.LocalIpPort == LocalIpPort {
 			existed = true
 			if m.LostMsgThresh != LostMsgThresh {
@@ -202,6 +205,8 @@ func (fd *FDImp) AddMonitor(LocalIpPort string, RemoteIpPort string, LostMsgThre
 		monitor.Rtt = 3
 		monitor.AckQuitChan = make(chan bool)
 		monitor.HBQuitChan = make(chan bool)
+		monitor.HBSentChan = make(chan bool)
+		monitor.TimeOutOrAck = make(chan bool)
 
 		lAddr, err := net.ResolveUDPAddr("udp", LocalIpPort)
 		if err != nil {
@@ -233,6 +238,7 @@ func (fd *FDImp) AddMonitor(LocalIpPort string, RemoteIpPort string, LostMsgThre
 
 		fmt.Println("start messenger and routine")
 		go fd.HeartBeatMessenger(globalMonitor)
+		globalMonitor.TimeOutOrAck <- true
 		go fd.ReceiveAckRoutine(globalMonitor)
 	}
 
@@ -244,7 +250,7 @@ func (fd *FDImp) RemoveMonitor(RemoteIpPort string) {
 	for i := range fd.MonitorList {
 		m := &fd.MonitorList[i]
 		if m.RemoteIpPort == RemoteIpPort {
-			m.CloseMonitor()
+			fd.CloseMonitor(m)
 		}
 	}
 	return
@@ -254,7 +260,7 @@ func (fd *FDImp) StopMonitoring() {
 	fmt.Println("Stop Monitor")
 	for i := range fd.MonitorList {
 		m := &fd.MonitorList[i]
-		m.CloseMonitor()
+		fd.CloseMonitor(m)
 	}
 	return
 }
@@ -298,7 +304,7 @@ func (fd *FDImp) HeartBeatMessenger(m *Monitor) error {
 		select {
 		case <-m.HBQuitChan:
 			return nil
-		default:
+		case <-m.TimeOutOrAck:
 			m.Mux.Lock()
 			id := getNextID()
 			hbToSend := HBeatMessage{fd.Nonce, id}
@@ -321,7 +327,6 @@ func (fd *FDImp) HeartBeatMessenger(m *Monitor) error {
 		m.Mux.Lock()
 		sleepTime := time.Duration(m.Rtt)
 		m.Mux.Unlock()
-		fmt.Println("sleep for " + strconv.FormatFloat(m.Rtt, 'f', 6, 64) + " seconds")
 		time.Sleep(sleepTime * time.Second)
 	}
 }
@@ -332,7 +337,7 @@ func (fd *FDImp) ReceiveAckRoutine(m *Monitor) error {
 		select {
 		case <-m.AckQuitChan:
 			return nil
-		default:
+		case <-m.HBSentChan:
 			// Set read dead line
 			rttDuration := time.Duration(m.Rtt)
 			duration := time.Duration(rttDuration * time.Second)
@@ -346,7 +351,7 @@ func (fd *FDImp) ReceiveAckRoutine(m *Monitor) error {
 			}
 			// wait for ack
 			ack, err := m.ReceiveAck()
-			m.Mux.Lock()
+			m.TimeOutOrAck <- true
 			if err != nil {
 				fmt.Println("failed: lost msg count ++")
 				m.LostMsgCount++
@@ -355,13 +360,14 @@ func (fd *FDImp) ReceiveAckRoutine(m *Monitor) error {
 					fd.Notify <- FailureDetected{
 						UDPIpPort: m.RemoteIpPort,
 						Timestamp: time.Now()}
-					m.CloseMonitor()
+					fd.CloseMonitor(m)
 					return nil
 				}
 				fmt.Println(err.Error())
 				continue
 			}
-			fmt.Println("ack received, reset lost msg to 0")
+
+			m.Mux.Lock()
 			// Yes, reset lost msg to 0
 			m.LostMsgCount = 0
 			// Yes, update Rtt for this monitor
@@ -419,6 +425,8 @@ func (m Monitor) SendHeartBeat(hb HBeatMessage) error {
 		fmt.Println(err.Error())
 		return err
 	}
+
+	m.HBSentChan <- true
 	return nil
 }
 
@@ -452,10 +460,9 @@ func (m Monitor) ReceiveAck() (AckMessage, error) {
 	n, _, err := m.Conn.ReadFrom(buf)
 
 	if err != nil {
-		fmt.Println(err.Error())
+		fmt.Println("did not receive ack in itme")
 		return AckMessage{}, err
 	}
-	fmt.Println("receive ack")
 
 	// bytes -> Buffer
 	reader := bytes.NewReader(buf[:n])
@@ -479,9 +486,19 @@ func getNextID() uint64 {
 	return num
 }
 
-func (m *Monitor) CloseMonitor() {
-	m.IsConnOn = false
-	m.AckQuitChan <- true
-	m.HBQuitChan <- true
-	m.Conn.Close()
+func (fd *FDImp) CloseMonitor(ml *Monitor) {
+	fmt.Println("close monitor " + ml.RemoteIpPort)
+
+	for i := range fd.MonitorList {
+		m := &fd.MonitorList[i]
+		fmt.Println("check " + m.RemoteIpPort)
+		if ml.RemoteIpPort == m.RemoteIpPort && ml.LocalIpPort == m.LocalIpPort {
+			fd.MonitorList = append(fd.MonitorList[:i], fd.MonitorList[i+1:]...)
+		}
+	}
+	fmt.Println("close monitor delete after " + strconv.Itoa(len(fd.MonitorList)))
+	ml.IsConnOn = false
+	ml.Conn.Close()
+	ml.AckQuitChan <- true
+	ml.HBQuitChan <- true
 }
