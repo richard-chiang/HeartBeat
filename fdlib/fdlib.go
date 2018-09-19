@@ -16,6 +16,7 @@ import (
 	"encoding/gob"
 	"errors"
 	"fmt"
+	"math/rand"
 	"net"
 	"strconv"
 	"sync"
@@ -85,6 +86,7 @@ var nextNumber uint64 = 0
 //===================================================================
 
 type FDImp struct {
+	Mux         sync.Mutex
 	Nonce       uint64
 	Notify      chan FailureDetected
 	ServerConn  net.PacketConn
@@ -228,8 +230,9 @@ func (fd *FDImp) AddMonitor(LocalIpPort string, RemoteIpPort string, LostMsgThre
 
 		monitor.Conn = conn
 		monitor.Mux.Unlock()
-
+		fd.Mux.Lock()
 		fd.MonitorList = append(fd.MonitorList, *monitor)
+		fd.Mux.Unlock()
 		globalMonitor = monitor
 	}
 
@@ -241,6 +244,11 @@ func (fd *FDImp) AddMonitor(LocalIpPort string, RemoteIpPort string, LostMsgThre
 	}
 
 	return
+}
+
+func random(min, max int) int {
+	rand.Seed(time.Now().Unix())
+	return rand.Intn(max-min) + min
 }
 
 func (fd *FDImp) RemoveMonitor(RemoteIpPort string) {
@@ -485,12 +493,15 @@ func getNextID() uint64 {
 }
 
 func (fd *FDImp) CloseMonitor(ml *Monitor) {
+	fd.Mux.Lock()
 	for i := range fd.MonitorList {
 		m := &fd.MonitorList[i]
 		if ml.RemoteIpPort == m.RemoteIpPort && ml.LocalIpPort == m.LocalIpPort {
 			fd.MonitorList = append(fd.MonitorList[:i], fd.MonitorList[i+1:]...)
+			break
 		}
 	}
+	fd.Mux.Unlock()
 	ml.IsConnOn = false
 	ml.HBQuitChan <- true
 	ml.Conn.Close()
