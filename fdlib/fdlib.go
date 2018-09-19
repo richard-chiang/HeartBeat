@@ -376,6 +376,7 @@ func (fd *FDImp) ReceiveAckRoutine(m *Monitor) error {
 					fmt.Println("failure detected")
 					fd.Mux.Lock()
 					fd.CloseMonitor(m)
+					fmt.Println("return from close monitor")
 					fd.Mux.Unlock()
 					fd.Notify <- FailureDetected{
 						UDPIpPort: m.RemoteIpPort,
@@ -512,6 +513,8 @@ func (fd *FDImp) CloseMonitor(ml *Monitor) {
 		}
 	}
 	ml.IsConnOn = false
-	ml.HBQuitChan <- true
+	go func() { ml.HBQuitChan <- true }()
+	go func() { ml.AckQuitChan <- true }()
 	ml.Conn.Close()
+	fmt.Println("connection closed")
 }

@@ -20,9 +20,9 @@ import "time"
 func main() {
 	// Local (127.0.0.1) hardcoded IPs to simplify testing. Run hostname -i
 	localIpPort := "198.162.33.23:8888"
-	toMonitorIpPort := "198.162.33.23:9999" // TODO: change this to remote node
+	toMonitorIpPort := "198.162.33.23:9989" // TODO: change this to remote node
 	localIpPortMon := "198.162.33.23:3001"  // Add a monitor for a remote node.
-	var lostMsgThresh uint8 = 5
+	var lostMsgThresh uint8 = 3
 
 	// TODO: generate a new random epoch nonce on each run
 	var epochNonce uint64 = 12345
@@ -65,7 +65,7 @@ func main() {
 			return
 		}
 		fmt.Println("Started to monitor node: ", toMonitorIpPort)
-	case <-time.After(time.Duration(int(lostMsgThresh)*4) * time.Second):
+	case <-time.After(time.Duration(int(lostMsgThresh)*6) * time.Second):
 		// case <-time.After(time.Second):
 		fmt.Println("No failures detected")
 	}
