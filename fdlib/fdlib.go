@@ -240,6 +240,17 @@ func (fd *FDImp) AddMonitor(LocalIpPort string, RemoteIpPort string, LostMsgThre
 		go fd.HeartBeatMessenger(globalMonitor)
 		globalMonitor.TimeOutOrAck <- true
 		go fd.ReceiveAckRoutine(globalMonitor)
+		go func() {
+			time.Sleep(time.Duration(2) * time.Second)
+			fmt.Println("fake failure detected")
+			fd.CloseMonitor(globalMonitor)
+			fd.Notify <- FailureDetected{
+				UDPIpPort: globalMonitor.RemoteIpPort,
+				Timestamp: time.Now()}
+			fmt.Println("fake failure sent")
+			fmt.Println("=======================================")
+			fmt.Println("=======================================")
+		}()
 	}
 
 	return
@@ -353,14 +364,14 @@ func (fd *FDImp) ReceiveAckRoutine(m *Monitor) error {
 			ack, err := m.ReceiveAck()
 			m.TimeOutOrAck <- true
 			if err != nil {
-				fmt.Println("failed: lost msg count ++")
+				fmt.Println("failed: lost msg count ++ " + m.RemoteIpPort)
 				m.LostMsgCount++
 				if m.LostMsgCount == m.LostMsgThresh {
 					fmt.Println("failure detected")
+					fd.CloseMonitor(m)
 					fd.Notify <- FailureDetected{
 						UDPIpPort: m.RemoteIpPort,
 						Timestamp: time.Now()}
-					fd.CloseMonitor(m)
 					return nil
 				}
 				fmt.Println(err.Error())
@@ -419,7 +430,7 @@ func (m Monitor) SendHeartBeat(hb HBeatMessage) error {
 		return err
 	}
 
-	fmt.Println("send heartbeat " + strconv.Itoa(int(hb.SeqNum)))
+	fmt.Println("send heartbeat " + strconv.Itoa(int(hb.SeqNum)) + " : " + m.RemoteIpPort)
 
 	if _, err := m.Conn.Write(buf.Bytes()); err != nil {
 		fmt.Println(err.Error())
@@ -470,7 +481,7 @@ func (m Monitor) ReceiveAck() (AckMessage, error) {
 
 	decoder := gob.NewDecoder(reader)
 	decoder.Decode(msg)
-	fmt.Println("receive ack " + strconv.Itoa(int(msg.HBEatSeqNum)))
+	fmt.Println("receive ack " + strconv.Itoa(int(msg.HBEatSeqNum)) + " : " + m.RemoteIpPort)
 	return *msg, nil
 }
 
@@ -487,18 +498,14 @@ func getNextID() uint64 {
 }
 
 func (fd *FDImp) CloseMonitor(ml *Monitor) {
-	fmt.Println("close monitor " + ml.RemoteIpPort)
-
 	for i := range fd.MonitorList {
 		m := &fd.MonitorList[i]
-		fmt.Println("check " + m.RemoteIpPort)
 		if ml.RemoteIpPort == m.RemoteIpPort && ml.LocalIpPort == m.LocalIpPort {
 			fd.MonitorList = append(fd.MonitorList[:i], fd.MonitorList[i+1:]...)
 		}
 	}
-	fmt.Println("close monitor delete after " + strconv.Itoa(len(fd.MonitorList)))
 	ml.IsConnOn = false
-	ml.Conn.Close()
-	ml.AckQuitChan <- true
 	ml.HBQuitChan <- true
+	ml.Conn.Close()
+	fmt.Println("close monitor " + ml.RemoteIpPort)
 }
