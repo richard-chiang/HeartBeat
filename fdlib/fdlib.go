@@ -235,22 +235,9 @@ func (fd *FDImp) AddMonitor(LocalIpPort string, RemoteIpPort string, LostMsgThre
 
 	if !globalMonitor.IsConnOn {
 		globalMonitor.IsConnOn = true
-
-		fmt.Println("start messenger and routine")
 		go fd.HeartBeatMessenger(globalMonitor)
 		globalMonitor.TimeOutOrAck <- true
 		go fd.ReceiveAckRoutine(globalMonitor)
-		go func() {
-			time.Sleep(time.Duration(2) * time.Second)
-			fmt.Println("fake failure detected")
-			fd.CloseMonitor(globalMonitor)
-			fd.Notify <- FailureDetected{
-				UDPIpPort: globalMonitor.RemoteIpPort,
-				Timestamp: time.Now()}
-			fmt.Println("fake failure sent")
-			fmt.Println("=======================================")
-			fmt.Println("=======================================")
-		}()
 	}
 
 	return
