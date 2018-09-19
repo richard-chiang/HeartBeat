@@ -22,10 +22,6 @@ func main() {
 	localIpPort := "198.162.33.23:8888"
 	toMonitorIpPort := "198.162.33.23:9999" // TODO: change this to remote node
 	localIpPortMon := "198.162.33.23:3001"  // Add a monitor for a remote node.
-	localIpPortMon2 := "198.162.33.23:3002" // Add a monitor for second remote node.
-	localIpPortMon3 := "198.162.33.23:3003" // Add a monitor for third remote node.
-	localIpPortMon4 := "198.162.33.23:3004" // Add a monitor for fourth remote node.
-	localIpPortMon5 := "198.162.33.23:3005" // Add a monitor for fifth node.
 	var lostMsgThresh uint8 = 5
 
 	// TODO: generate a new random epoch nonce on each run
@@ -47,22 +43,6 @@ func main() {
 	fmt.Println("Started responding to heartbeats.")
 
 	err = fd.AddMonitor(localIpPortMon, toMonitorIpPort, lostMsgThresh)
-	if checkError(err) != nil {
-		return
-	}
-	err = fd.AddMonitor(localIpPortMon2, toMonitorIpPort, lostMsgThresh)
-	if checkError(err) != nil {
-		return
-	}
-	err = fd.AddMonitor(localIpPortMon3, toMonitorIpPort, lostMsgThresh)
-	if checkError(err) != nil {
-		return
-	}
-	err = fd.AddMonitor(localIpPortMon4, toMonitorIpPort, lostMsgThresh)
-	if checkError(err) != nil {
-		return
-	}
-	err = fd.AddMonitor(localIpPortMon5, toMonitorIpPort, lostMsgThresh)
 	if checkError(err) != nil {
 		return
 	}
