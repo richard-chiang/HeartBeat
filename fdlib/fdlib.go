@@ -164,7 +164,7 @@ func (fd *FDImp) StartResponding(LocalIpPort string) (err error) {
 }
 
 func (fd *FDImp) StopResponding() {
-	fd.QuitChan <- true
+	go func() { fd.QuitChan <- true }()
 	err := fd.ServerConn.Close()
 	if err != nil {
 		fmt.Println(err.Error())
@@ -178,6 +178,8 @@ func (fd *FDImp) AddMonitor(LocalIpPort string, RemoteIpPort string, LostMsgThre
 	// check if it exist
 	existed := false
 	globalMonitor := new(Monitor)
+
+	fd.Mux.Lock()
 	for i := range fd.MonitorList {
 		m := &fd.MonitorList[i]
 		fmt.Println("add monitor check " + m.RemoteIpPort)
@@ -192,6 +194,7 @@ func (fd *FDImp) AddMonitor(LocalIpPort string, RemoteIpPort string, LostMsgThre
 			break
 		}
 	}
+	fd.Mux.Unlock()
 
 	fmt.Println("add monitor, is it existed? " + strconv.FormatBool(existed))
 
@@ -253,21 +256,25 @@ func random(min, max int) int {
 
 func (fd *FDImp) RemoveMonitor(RemoteIpPort string) {
 	fmt.Println("remove monitor " + RemoteIpPort)
+	fd.Mux.Lock()
 	for i := range fd.MonitorList {
 		m := &fd.MonitorList[i]
 		if m.RemoteIpPort == RemoteIpPort {
 			fd.CloseMonitor(m)
 		}
 	}
+	fd.Mux.Unlock()
 	return
 }
 
 func (fd *FDImp) StopMonitoring() {
 	fmt.Println("Stop Monitor")
+	fd.Mux.Lock()
 	for i := range fd.MonitorList {
 		m := &fd.MonitorList[i]
 		fd.CloseMonitor(m)
 	}
+	fd.Mux.Unlock()
 	return
 }
 
@@ -278,14 +285,17 @@ func (fd *FDImp) StopMonitoring() {
 //===================================================================
 
 func (fd *FDImp) ServerMessenger() error {
+	fmt.Println("server messenger open")
 	var err error
 	for err == nil {
 		select {
 		case <-fd.QuitChan:
+			fmt.Println("quit server messenger")
 			fd.IsServerOn = false
 			return nil
 
 		default:
+			fmt.Println("call receive heart beat")
 			hb, addr, err := fd.ReceiveHeartBeat()
 
 			if err != nil {
@@ -297,6 +307,7 @@ func (fd *FDImp) ServerMessenger() error {
 				HBEatEpochNonce: hb.EpochNonce,
 				HBEatSeqNum:     hb.SeqNum}
 
+			fmt.Println("send ack")
 			go fd.SendAck(ack, addr)
 		}
 	}
@@ -363,7 +374,9 @@ func (fd *FDImp) ReceiveAckRoutine(m *Monitor) error {
 				m.LostMsgCount++
 				if m.LostMsgCount == m.LostMsgThresh {
 					fmt.Println("failure detected")
+					fd.Mux.Lock()
 					fd.CloseMonitor(m)
+					fd.Mux.Unlock()
 					fd.Notify <- FailureDetected{
 						UDPIpPort: m.RemoteIpPort,
 						Timestamp: time.Now()}
@@ -466,7 +479,6 @@ func (m Monitor) ReceiveAck() (AckMessage, error) {
 	n, _, err := m.Conn.ReadFrom(buf)
 
 	if err != nil {
-		fmt.Println("did not receive ack in itme")
 		return AckMessage{}, err
 	}
 
@@ -476,7 +488,6 @@ func (m Monitor) ReceiveAck() (AckMessage, error) {
 
 	decoder := gob.NewDecoder(reader)
 	decoder.Decode(msg)
-	fmt.Println("receive ack " + strconv.Itoa(int(msg.HBEatSeqNum)) + " : " + m.RemoteIpPort)
 	return *msg, nil
 }
 
@@ -493,7 +504,6 @@ func getNextID() uint64 {
 }
 
 func (fd *FDImp) CloseMonitor(ml *Monitor) {
-	fd.Mux.Lock()
 	for i := range fd.MonitorList {
 		m := &fd.MonitorList[i]
 		if ml.RemoteIpPort == m.RemoteIpPort && ml.LocalIpPort == m.LocalIpPort {
@@ -501,9 +511,7 @@ func (fd *FDImp) CloseMonitor(ml *Monitor) {
 			break
 		}
 	}
-	fd.Mux.Unlock()
 	ml.IsConnOn = false
 	ml.HBQuitChan <- true
 	ml.Conn.Close()
-	fmt.Println("close monitor " + ml.RemoteIpPort)
 }

@@ -44,11 +44,6 @@ func main() {
 	defer fd.StopMonitoring()
 	defer fd.StopResponding()
 
-	err = fd.StartResponding(localIpPort)
-	if checkError(err) != nil {
-		return
-	}
-
 	fmt.Println("Started responding to heartbeats.")
 
 	err = fd.AddMonitor(localIpPortMon, toMonitorIpPort, lostMsgThresh)
@@ -68,6 +63,11 @@ func main() {
 		return
 	}
 	err = fd.AddMonitor(localIpPortMon5, toMonitorIpPort, lostMsgThresh)
+	if checkError(err) != nil {
+		return
+	}
+
+	err = fd.StartResponding(localIpPort)
 	if checkError(err) != nil {
 		return
 	}
